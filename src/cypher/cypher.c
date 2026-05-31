@@ -1267,6 +1267,8 @@ static int parse_aggregate_item(parser_t *p, cbm_return_item_t *item) {
     cbm_token_type_t ft = peek(p)->type;
     advance(p);
     expect(p, TOK_LPAREN);
+    /* Optional DISTINCT inside the call: COUNT(DISTINCT x) (#239). */
+    item->distinct = match(p, TOK_DISTINCT);
     if (match(p, TOK_STAR)) {
         item->variable = heap_strdup("*");
     } else {
@@ -2774,6 +2776,19 @@ static bool is_aggregate_func(const char *func) {
             strcmp(func, "MIN") == 0 || strcmp(func, "MAX") == 0 || strcmp(func, "COLLECT") == 0);
 }
 
+/* Append `val` to a string list only if not already present — i.e. maintain a
+ * set of distinct values. Used by COUNT(DISTINCT x) (#239). */
+static void distinct_list_add(char ***list, int *count, const char *val) {
+    for (int i = 0; i < *count; i++) {
+        if (strcmp((*list)[i], val) == 0) {
+            return;
+        }
+    }
+    int idx = (*count)++;
+    *list = safe_realloc(*list, (size_t)(idx + SKIP_ONE) * sizeof(char *));
+    (*list)[idx] = heap_strdup(val);
+}
+
 /* Sort bindings by a virtual variable using bubble sort */
 static void sort_bindings(binding_t *vbindings, int count, const char *key, bool desc) {
     for (int i = 0; i < count - SKIP_ONE; i++) {
@@ -2848,6 +2863,8 @@ typedef struct {
     double *sums;
     int *counts;
     double *mins, *maxs;
+    char ***distinct_lists; /* per-item set of seen values for COUNT(DISTINCT) */
+    int *distinct_n;        /* per-item distinct count (#239) */
 } with_agg_t;
 
 /* Build a group key from non-aggregate WITH items */
@@ -2885,6 +2902,8 @@ static int with_agg_find_or_create(with_agg_t **aggs, int *agg_cnt, int *agg_cap
     (*aggs)[found].counts = calloc(wc->count, sizeof(int));
     (*aggs)[found].mins = calloc(wc->count, sizeof(double));
     (*aggs)[found].maxs = calloc(wc->count, sizeof(double));
+    (*aggs)[found].distinct_lists = calloc(wc->count, sizeof(char **));
+    (*aggs)[found].distinct_n = calloc(wc->count, sizeof(int));
     for (int ci = 0; ci < wc->count; ci++) {
         (*aggs)[found].mins[ci] = CYP_DBL_MAX;
         (*aggs)[found].maxs[ci] = -CYP_DBL_MAX;
@@ -2908,6 +2927,9 @@ static void with_agg_accumulate(with_agg_t *agg, cbm_return_clause_t *wc, bindin
         }
         agg->counts[ci]++;
         const char *raw = binding_get_virtual(b, wc->items[ci].variable, wc->items[ci].property);
+        if (wc->items[ci].distinct && strcmp(wc->items[ci].func, "COUNT") == 0) {
+            distinct_list_add(&agg->distinct_lists[ci], &agg->distinct_n[ci], raw);
+        }
         double dv = strtod(raw, NULL);
         agg->sums[ci] += dv;
         if (dv < agg->mins[ci]) {
@@ -2949,12 +2971,20 @@ static void with_agg_free(with_agg_t *aggs, int agg_cnt, int item_count) {
     for (int a = 0; a < agg_cnt; a++) {
         for (int ci = 0; ci < item_count; ci++) {
             safe_str_free(&aggs[a].group_vals[ci]);
+            if (aggs[a].distinct_lists && aggs[a].distinct_lists[ci]) {
+                for (int j = 0; j < aggs[a].distinct_n[ci]; j++) {
+                    free(aggs[a].distinct_lists[ci][j]);
+                }
+                free(aggs[a].distinct_lists[ci]);
+            }
         }
         free(aggs[a].group_vals);
         free(aggs[a].sums);
         free(aggs[a].counts);
         free(aggs[a].mins);
         free(aggs[a].maxs);
+        free(aggs[a].distinct_lists);
+        free(aggs[a].distinct_n);
     }
     free(aggs);
 }
@@ -2985,7 +3015,11 @@ static void execute_with_aggregate(cbm_return_clause_t *wc, binding_t *bindings,
             const char *alias = resolve_item_alias(&wc->items[ci], name_buf, sizeof(name_buf));
             if (wc->items[ci].func) {
                 char vbuf[CBM_SZ_64];
-                with_agg_format(wc->items[ci].func, &aggs[a], ci, vbuf, sizeof(vbuf));
+                if (wc->items[ci].distinct && strcmp(wc->items[ci].func, "COUNT") == 0) {
+                    snprintf(vbuf, sizeof(vbuf), "%d", aggs[a].distinct_n[ci]); /* #239 */
+                } else {
+                    with_agg_format(wc->items[ci].func, &aggs[a], ci, vbuf, sizeof(vbuf));
+                }
                 with_add_vbinding_var(&vb, alias, vbuf);
             } else {
                 with_add_vbinding_var(&vb, alias, aggs[a].group_vals[ci]);
@@ -3291,6 +3325,9 @@ static void ret_agg_accumulate(ret_agg_entry_t *entry, cbm_return_clause_t *ret,
             entry->collect_lists[ci] =
                 safe_realloc(entry->collect_lists[ci], (idx + SKIP_ONE) * sizeof(char *));
             entry->collect_lists[ci][idx] = heap_strdup(raw);
+        } else if (ret->items[ci].distinct && strcmp(ret->items[ci].func, "COUNT") == 0) {
+            /* COUNT(DISTINCT x): track unique values; emit the set size (#239). */
+            distinct_list_add(&entry->collect_lists[ci], &entry->collect_counts[ci], raw);
         }
     }
 }
@@ -3342,6 +3379,12 @@ static void ret_agg_emit_row(cbm_return_clause_t *ret, ret_agg_entry_t *agg, res
     for (int ci = 0; ci < ret->count; ci++) {
         if (!ret->items[ci].func) {
             row[ci] = agg->group_vals[ci];
+            continue;
+        }
+        if (ret->items[ci].distinct && strcmp(ret->items[ci].func, "COUNT") == 0) {
+            /* COUNT(DISTINCT x) — number of unique values accumulated (#239). */
+            snprintf(bufs[ci], sizeof(bufs[ci]), "%d", agg->collect_counts[ci]);
+            row[ci] = bufs[ci];
             continue;
         }
         format_agg_value(ret->items[ci].func, agg->counts[ci], agg->sums[ci], agg->mins[ci],

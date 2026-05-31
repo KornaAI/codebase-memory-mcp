@@ -196,6 +196,16 @@ if [ "$ALT_ROWS" -lt 1 ]; then
 fi
 echo "OK: query_graph (n:Function|Module) returned $ALT_ROWS row(s)"
 
+# #239 count(DISTINCT) — must parse and return a single aggregate row.
+CYPHER_CD=$(cli query_graph "{\"project\":\"$PROJECT\",\"query\":\"MATCH (f:Function) RETURN count(DISTINCT f.label)\"}")
+CD_ROWS=$(echo "$CYPHER_CD" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(len(d.get('rows',[])))" 2>/dev/null || echo "0")
+if [ "$CD_ROWS" -ne 1 ]; then
+  echo "FAIL: query_graph count(DISTINCT) expected 1 row, got $CD_ROWS"
+  echo "$CYPHER_CD"
+  exit 1
+fi
+echo "OK: query_graph count(DISTINCT f.label) returned 1 aggregate row"
+
 # 3e: delete_project cleanup
 cli delete_project "{\"project\":\"$PROJECT\"}" > /dev/null
 

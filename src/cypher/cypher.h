@@ -237,6 +237,7 @@ typedef struct {
     const char *alias;     /* NULL if no alias */
     const char *func;      /* "COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT",
                               "toLower", "toUpper", "toString" or NULL */
+    bool distinct;         /* COUNT(DISTINCT x) — count unique values (#239) */
     cbm_case_expr_t *kase; /* CASE expression (NULL if not CASE) */
 } cbm_return_item_t;
 

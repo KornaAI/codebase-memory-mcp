@@ -802,6 +802,37 @@ TEST(cypher_exec_where_label_test_issue241) {
     PASS();
 }
 
+/* issue #239: COUNT(DISTINCT x) — previously a parse error. */
+TEST(cypher_exec_count_distinct_issue239) {
+    cbm_store_t *s = setup_cypher_store();
+
+    /* 4 functions all share label "Function" → COUNT(DISTINCT f.label) = 1. */
+    cbm_cypher_result_t r = {0};
+    int rc =
+        cbm_cypher_execute(s, "MATCH (f:Function) RETURN count(DISTINCT f.label)", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "1");
+    cbm_cypher_result_free(&r);
+
+    /* Non-distinct COUNT counts all 4 occurrences. */
+    cbm_cypher_result_t r2 = {0};
+    rc = cbm_cypher_execute(s, "MATCH (f:Function) RETURN count(f.label)", "test", 0, &r2);
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(r2.rows[0][0], "4");
+    cbm_cypher_result_free(&r2);
+
+    /* DISTINCT over the 4 unique function names = 4. */
+    cbm_cypher_result_t r3 = {0};
+    rc = cbm_cypher_execute(s, "MATCH (f:Function) RETURN count(DISTINCT f.name)", "test", 0, &r3);
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(r3.rows[0][0], "4");
+    cbm_cypher_result_free(&r3);
+
+    cbm_store_close(s);
+    PASS();
+}
+
 /* issue #242: openCypher label alternation in MATCH — (n:A|B). */
 TEST(cypher_exec_label_alternation_issue242) {
     cbm_store_t *s = setup_cypher_store();
@@ -2298,6 +2329,7 @@ SUITE(cypher) {
     RUN_TEST(cypher_exec_with_distinct_issue238);
     RUN_TEST(cypher_exec_where_label_test_issue241);
     RUN_TEST(cypher_exec_label_alternation_issue242);
+    RUN_TEST(cypher_exec_count_distinct_issue239);
     RUN_TEST(cypher_exec_inline_props);
     RUN_TEST(cypher_parse_where_starts_with);
     RUN_TEST(cypher_parse_where_contains);

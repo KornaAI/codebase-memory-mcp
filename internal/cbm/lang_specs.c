@@ -501,7 +501,9 @@ static const char *elixir_branch_types[] = {"call", NULL};
 static const char *elixir_var_types[] = {"binary_operator", NULL};
 
 // ==================== HASKELL ====================
-static const char *haskell_func_types[] = {"function", "signature", NULL};
+/* "bind" = a nullary value binding (`foo = 1`); has a `name` field like `function`.
+ * `signature` (type annotations) is suppressed in resolve_func_name so it never doubles. */
+static const char *haskell_func_types[] = {"function", "signature", "bind", NULL};
 static const char *haskell_class_types[] = {"class", "data_type", "newtype", NULL};
 static const char *haskell_module_types[] = {"haskell", NULL};
 static const char *haskell_call_types[] = {"infix", "apply", NULL};
@@ -691,7 +693,12 @@ static const char *clojure_module_types[] = {"source", NULL};
 static const char *clojure_call_types[] = {"list_lit", NULL};
 
 // ==================== F# ====================
-static const char *fsharp_func_types[] = {"function_declaration", "value_declaration", NULL};
+/* Top-level `let f () = ...` parses to function_or_value_defn (module-level
+ * value_declaration is aliased to declaration_expression, which wraps it). The
+ * name lives on a function_declaration_left/value_declaration_left child — see
+ * the CBM_LANG_FSHARP branch in resolve_func_name. */
+static const char *fsharp_func_types[] = {"function_declaration", "value_declaration",
+                                          "function_or_value_defn", NULL};
 static const char *fsharp_class_types[] = {"type_definition", "exception_definition", NULL};
 static const char *fsharp_module_types[] = {"file", NULL};
 static const char *fsharp_call_types[] = {"application_expression", "dot_expression", NULL};
@@ -748,7 +755,10 @@ static const char *elm_import_types[] = {"import", NULL};
 static const char *elm_branch_types[] = {"case_of_expr", "if_else_expr", NULL};
 
 // ==================== FORTRAN ====================
-static const char *fortran_func_types[] = {"function", "subroutine", "function_statement", NULL};
+/* subroutine/function wrap an inner *_statement that carries the `name` field;
+ * function_statement was already present, subroutine_statement was missing. */
+static const char *fortran_func_types[] = {"function", "subroutine", "function_statement",
+                                           "subroutine_statement", NULL};
 static const char *fortran_class_types[] = {"derived_type_definition", "enum_statement", NULL};
 static const char *fortran_module_types[] = {"translation_unit", NULL};
 static const char *fortran_call_types[] = {"call_expression", "keyword_argument", "call", NULL};

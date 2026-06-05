@@ -16,6 +16,39 @@ The grammars were originally vendored as bare `parser.c`+`scanner.c` with **no r
 
 > ⚠️ **Pinned commit = the revision nvim-treesitter/Helix vendor** (battle-tested, canonical source), not bleeding-edge HEAD. When re-vendoring, update the pinned commit here.
 
+## Custom extraction handling (definition extraction)
+
+The grammars below carry **custom definition-extraction support** in
+`internal/cbm/extract_defs.c` (and `internal/cbm/lang_specs.c`). Their function /
+definition nodes do **not** expose a `name` field that the generic extractor reads
+— the name lives on a nested/child/parent node, or (for the Lisp family) a
+definition is a macro form inside a generic `list` node with no dedicated def
+node. Without this handling these grammars produce only a file-level `Module`
+node and **zero functions/types**. A future grammar refresh that changes these
+node shapes must update the corresponding branch.
+
+Guarded by the `contract_all_grammars_in_graph` graph-breadth test in
+`tests/test_lang_contract.c` (each was reproduced as a failing case before the fix).
+
+| grammar | custom handling |
+|---|---|
+| ada      | `resolve_func_name`: `subprogram_body`/`subprogram_declaration` → `procedure_specification`/`function_specification` child's `name` field |
+| cairo    | `resolve_func_name`: `function_definition`/`function_signature` → `identifier` child |
+| clojure  | `extract_lisp_def`: `(defn …)` / `(def …)` head-symbol forms in `list_lit` |
+| d        | `resolve_func_name`: `function_declaration` → `identifier` child |
+| fortran  | `resolve_func_name`: `subroutine`/`function` → inner `*_statement`'s `name` field |
+| fsharp   | `func_types` += `function_or_value_defn`; `resolve_func_name` → `function_declaration_left`/`value_declaration_left` identifier |
+| haskell  | `func_types` += `bind` (nullary value bindings; `signature` suppressed) |
+| hlsl     | added to the C-family declarator-name gate (tree-sitter-cpp derivative) |
+| ispc     | added to the C-family declarator-name gate (extends tree-sitter-c) |
+| odin     | `resolve_func_name`: `procedure_declaration` → `identifier` child |
+| pascal   | `resolve_func_name`: `defProc` → `header` (`declProc`) child's `name` field |
+| racket   | `extract_lisp_def`: `(define …)` head-symbol forms in `list` |
+| rescript | `resolve_func_name`: `function` (arrow) → enclosing `let_binding`'s `pattern` field |
+| scheme   | `extract_lisp_def`: `(define …)` head-symbol forms in `list` |
+| slang    | added to the C-family declarator-name gate (tree-sitter-cpp/hlsl fork) |
+| squirrel | `resolve_func_name`: `function_declaration` → `identifier` child |
+
 ## Vendored from verified upstream
 
 | grammar | cur ABI | upstream repo | pinned commit | verdict | LICENSE |

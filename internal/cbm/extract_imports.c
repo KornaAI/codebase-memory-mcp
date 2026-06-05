@@ -29,6 +29,7 @@ static void parse_c_imports(CBMExtractCtx *ctx);
 static void parse_ruby_imports(CBMExtractCtx *ctx);
 static void parse_lua_imports(CBMExtractCtx *ctx);
 static void parse_r_imports(CBMExtractCtx *ctx);
+static void parse_kotlin_imports(CBMExtractCtx *ctx);
 static void parse_generic_imports(CBMExtractCtx *ctx, const char *node_type);
 static void parse_wolfram_imports(CBMExtractCtx *ctx);
 
@@ -865,6 +866,42 @@ static void parse_generic_imports(CBMExtractCtx *ctx, const char *node_type) {
     ts_tree_cursor_delete(&cursor);
 }
 
+// --- Kotlin imports ---
+// tree-sitter-kotlin nests imports: source_file -> import_list -> import_header*.
+// parse_generic_imports only scans the DIRECT children of root, and "import" is
+// the keyword token (anon_sym_import), not a statement node — so a generic
+// match on "import" finds nothing.  Descend into import_list (and accept a bare
+// import_header for grammar variants) and reuse the generic path extractors.
+static void extract_one_import_header(CBMExtractCtx *ctx, TSNode header) {
+    if (!try_generic_path_fields(ctx, header)) {
+        generic_import_from_text(ctx, header);
+    }
+}
+
+static void parse_kotlin_imports(CBMExtractCtx *ctx) {
+    TSTreeCursor cursor = ts_tree_cursor_new(ctx->root);
+    if (!ts_tree_cursor_goto_first_child(&cursor)) {
+        ts_tree_cursor_delete(&cursor);
+        return;
+    }
+    do {
+        TSNode node = ts_tree_cursor_current_node(&cursor);
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, "import_header") == 0) {
+            extract_one_import_header(ctx, node);
+        } else if (strcmp(kind, "import_list") == 0) {
+            uint32_t nc = ts_node_child_count(node);
+            for (uint32_t j = 0; j < nc; j++) {
+                TSNode child = ts_node_child(node, j);
+                if (strcmp(ts_node_type(child), "import_header") == 0) {
+                    extract_one_import_header(ctx, child);
+                }
+            }
+        }
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+}
+
 // --- Wolfram imports ---
 // get_top: << "package" (Get["file"])
 // apply where first child is builtin_symbol "Needs" with string arg
@@ -1046,7 +1083,7 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         parse_java_imports(ctx);
         break;
     case CBM_LANG_KOTLIN:
-        parse_generic_imports(ctx, "import");
+        parse_kotlin_imports(ctx);
         break;
     case CBM_LANG_SCALA:
         parse_generic_imports(ctx, "import_declaration");

@@ -4530,8 +4530,10 @@ static void rust_build_registry_from_defs(CBMArena *arena, CBMTypeRegistry *reg,
         if (!d->qualified_name || !d->name)
             continue;
 
-        if (d->label && (strcmp(d->label, "Class") == 0 || strcmp(d->label, "Type") == 0 ||
-                         strcmp(d->label, "Interface") == 0 || strcmp(d->label, "Trait") == 0)) {
+        // Every type-like container (Class/Struct/Type/Interface/Trait/Enum).
+        // Struct included so a Rust `struct Foo` (now labelled "Struct") registers
+        // as a type and its `impl Foo` methods/fields resolve.
+        if (cbm_label_is_type_like(d->label)) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
             rt.qualified_name = d->qualified_name;
@@ -4839,7 +4841,10 @@ static void rust_build_registry_from_defs(CBMArena *arena, CBMTypeRegistry *reg,
             CBMDefinition *d = &result->defs.items[i];
             if (!d->qualified_name || !d->name)
                 continue;
-            if (!d->label || (strcmp(d->label, "Class") != 0 && strcmp(d->label, "Type") != 0))
+            /* `#[derive(...)]` rides on type-like defs — most often a struct or
+             * enum (now labelled "Struct"/"Enum"), also type aliases. Accept the
+             * whole type-like set so a derive on a struct is not dropped. */
+            if (!cbm_label_is_type_like(d->label))
                 continue;
             if (!d->decorators)
                 continue;
@@ -5151,8 +5156,9 @@ void cbm_run_rust_lsp_cross(CBMArena *arena, const char *source, int source_len,
             continue;
         const char *def_mod = d->def_module_qn ? d->def_module_qn : module_qn;
 
-        if (strcmp(d->label, "Type") == 0 || strcmp(d->label, "Class") == 0 ||
-            strcmp(d->label, "Interface") == 0 || strcmp(d->label, "Trait") == 0) {
+        // Every type-like container (Type/Class/Struct/Interface/Trait/Enum).
+        // Struct included so Rust structs (now labelled "Struct") register here.
+        if (cbm_label_is_type_like(d->label)) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
             rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);

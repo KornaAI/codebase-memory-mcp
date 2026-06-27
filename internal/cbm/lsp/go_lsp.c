@@ -1713,9 +1713,10 @@ void cbm_run_go_lsp(CBMArena* arena, CBMFileResult* result,
         CBMDefinition* d = &result->defs.items[i];
         if (!d->qualified_name || !d->name) continue;
 
-        // Register Class/Type nodes
-        if (d->label && (strcmp(d->label, "Class") == 0 || strcmp(d->label, "Type") == 0 ||
-                         strcmp(d->label, "Interface") == 0)) {
+        // Register every type-like container (Class/Struct/Type/Interface/Enum/
+        // Trait). Struct included so a Go `type T struct {...}` (now labelled
+        // "Struct") is registered as a type and its methods/embedding resolve.
+        if (cbm_label_is_type_like(d->label)) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
             rt.qualified_name = d->qualified_name;
@@ -2534,9 +2535,9 @@ void cbm_run_go_lsp_cross(
 
         const char* def_mod = d->def_module_qn ? d->def_module_qn : module_qn;
 
-        // Type/Interface/Class
-        if (strcmp(d->label, "Type") == 0 || strcmp(d->label, "Class") == 0 ||
-            strcmp(d->label, "Interface") == 0) {
+        // Every type-like container (Type/Class/Struct/Interface/Enum/Trait).
+        // Struct included so Go structs (now labelled "Struct") register as types.
+        if (cbm_label_is_type_like(d->label)) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
             rt.qualified_name = d->qualified_name;  // borrowed
@@ -2787,8 +2788,9 @@ CBMTypeRegistry* cbm_go_build_cross_registry(
          * fall back to — this registry is project-wide, not per-file. */
         const char* def_mod = d->def_module_qn ? d->def_module_qn : "";
 
-        if (strcmp(d->label, "Type") == 0 || strcmp(d->label, "Class") == 0 ||
-            strcmp(d->label, "Interface") == 0) {
+        // Every type-like container (Type/Class/Struct/Interface/Enum/Trait).
+        // Struct included so Go structs (now labelled "Struct") register as types.
+        if (cbm_label_is_type_like(d->label)) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
             rt.qualified_name = d->qualified_name; /* borrowed */

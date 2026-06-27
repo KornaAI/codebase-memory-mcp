@@ -410,12 +410,12 @@ static const char *resolve_as_class(const cbm_registry_t *reg, const char *name,
     if (!res.qualified_name || res.qualified_name[0] == '\0') {
         return NULL;
     }
+    /* Accept any type-like container (Class/Struct/Interface/Enum/Type/Trait):
+     * base classes, Rust `impl Trait for S` struct receivers, and Go struct
+     * embedding all resolve through here. Struct included so the struct receiver
+     * of an IMPLEMENTS edge is not dropped. */
     const char *label = cbm_registry_label_of(reg, res.qualified_name);
-    if (!label) {
-        return NULL;
-    }
-    if (strcmp(label, "Class") != 0 && strcmp(label, "Interface") != 0 &&
-        strcmp(label, "Type") != 0 && strcmp(label, "Enum") != 0) {
+    if (!cbm_label_is_type_like(label)) {
         return NULL;
     }
     return res.qualified_name;
@@ -822,11 +822,14 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
     if (!def->name || !def->qualified_name || !def->label) {
         return 0;
     }
-    /* Register callable symbols + Interface — see pass_definitions.c for rationale.
-     * Variable/Field defs are registered too so READS/WRITES can resolve. */
+    /* Register callable symbols + every type-like container (Class/Struct/
+     * Interface/Enum/Type/Trait) — see pass_definitions.c for rationale. Struct
+     * included so Rust/Go/Swift/D structs resolve as type targets. Variable/Field
+     * defs are registered too so READS/WRITES can resolve.
+     * KEEP IN SYNC with pass_definitions.c and pipeline_incremental.c. */
     if (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0 ||
-        strcmp(def->label, "Class") == 0 || strcmp(def->label, "Interface") == 0 ||
-        strcmp(def->label, "Variable") == 0 || strcmp(def->label, "Field") == 0) {
+        cbm_label_is_type_like(def->label) || strcmp(def->label, "Variable") == 0 ||
+        strcmp(def->label, "Field") == 0) {
         cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
         (*reg_entries)++;
     }

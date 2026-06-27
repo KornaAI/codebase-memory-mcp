@@ -3502,13 +3502,27 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
 
     // Sway/WGSL: label struct defs as "Struct" and Sway `abi` blocks as
     // "Interface". Scoped to these grammar-only languages so established
-    // struct-as-"Class" labeling (Rust/C++/Go/Cap'n Proto …) and the
-    // downstream type/IMPLEMENTS resolvers that depend on it are unaffected.
+    // struct-as-"Class" labeling (C++/Cap'n Proto …) and the downstream
+    // type/IMPLEMENTS resolvers that depend on it are unaffected.
     if (ctx->language == CBM_LANG_SWAY || ctx->language == CBM_LANG_WGSL) {
         if (strcmp(kind, "struct_item") == 0 || strcmp(kind, "struct_declaration") == 0) {
             label = "Struct";
         } else if (strcmp(kind, "abi_item") == 0) {
             label = "Interface";
+        }
+    }
+    // Rust/Swift/D: a struct is a distinct kind from a class — emit the precise
+    // "Struct" label rather than collapsing it to "Class". Scoped to these three
+    // grammar/LSP languages whose struct node is `struct_item` (Rust) or
+    // `struct_declaration` (Swift, D). C/C++/Obj-C keep `struct_specifier` →
+    // "Class" (a C++ struct is class-like). "Struct" is a type-like container:
+    // every type-resolution / registry / IMPLEMENTS / LSP-registrar consumer
+    // routes through cbm_label_is_type_like(), so a struct still resolves as a
+    // type for its methods, fields, inheritance and impls.
+    if (ctx->language == CBM_LANG_RUST || ctx->language == CBM_LANG_SWIFT ||
+        ctx->language == CBM_LANG_DLANG) {
+        if (strcmp(kind, "struct_item") == 0 || strcmp(kind, "struct_declaration") == 0) {
+            label = "Struct";
         }
     }
     // F#: a `type_definition` that has a primary constructor (`type Foo(...) =`)
@@ -3525,7 +3539,10 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
         }
     }
 
-    // Go type_spec: check inner type for interface/struct
+    // Go type_spec: check inner type for interface/struct. A Go `type T struct
+    // {...}` is a struct → emit the precise "Struct" label (a type-like container;
+    // its methods/fields/embedding resolve through cbm_label_is_type_like(), and
+    // cbm_pipeline_implements_go() collects Struct nodes too).
     if (strcmp(kind, "type_spec") == 0) {
         TSNode type_inner = ts_node_child_by_field_name(node, TS_FIELD("type"));
         if (!ts_node_is_null(type_inner)) {
@@ -3533,7 +3550,7 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
             if (strcmp(inner_kind, "interface_type") == 0) {
                 label = "Interface";
             } else if (strcmp(inner_kind, "struct_type") == 0) {
-                label = "Class";
+                label = "Struct";
             }
         }
     }

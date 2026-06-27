@@ -155,6 +155,18 @@ static const char *puppet_keywords[] = {
     "and",    "or",    "in",     "node",  "class", "define", "inherits", "default",
     "return", NULL};
 
+// True when `label` names a type-like container definition (see cbm.h). Single
+// source of truth for the type-resolution / registry / IMPLEMENTS / LSP-type
+// consumers — adding a label here updates them all.
+bool cbm_label_is_type_like(const char *label) {
+    if (!label) {
+        return false;
+    }
+    return strcmp(label, "Class") == 0 || strcmp(label, "Struct") == 0 ||
+           strcmp(label, "Interface") == 0 || strcmp(label, "Enum") == 0 ||
+           strcmp(label, "Type") == 0 || strcmp(label, "Trait") == 0;
+}
+
 bool cbm_is_keyword(const char *name, CBMLanguage lang) {
     if (!name || !name[0]) {
         return true;

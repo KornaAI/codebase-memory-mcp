@@ -167,13 +167,12 @@ static const char *resolve_as_class(const cbm_registry_t *reg, const char *name,
         return NULL;
     }
 
-    /* Verify it's a Class, Interface, or Type */
+    /* Verify it's a type-like container (Class/Struct/Interface/Enum/Type/Trait):
+     * a base/embedded type, impl receiver, or inheritance target must resolve to
+     * one of these. Struct included so Rust/Go/Swift/D `impl Trait for S` and Go
+     * struct embedding resolve. */
     const char *label = cbm_registry_label_of(reg, res.qualified_name);
-    if (!label) {
-        return NULL;
-    }
-    if (strcmp(label, "Class") != 0 && strcmp(label, "Interface") != 0 &&
-        strcmp(label, "Type") != 0 && strcmp(label, "Enum") != 0) {
+    if (!cbm_label_is_type_like(label)) {
         return NULL;
     }
     return res.qualified_name;
@@ -301,11 +300,16 @@ int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
         return 0;
     }
 
-    /* Find all Class nodes */
+    /* Find candidate concrete types. In Go the type that satisfies an interface
+     * is a struct (now labelled "Struct") or a named type (labelled "Class"); both
+     * sets are checked. Each call returns a borrowed internal array (no free). */
     const cbm_gbuf_node_t **classes = NULL;
     int class_count = 0;
     cbm_gbuf_find_by_label(ctx->gbuf, "Class", &classes, &class_count);
-    if (class_count == 0) {
+    const cbm_gbuf_node_t **structs = NULL;
+    int struct_count = 0;
+    cbm_gbuf_find_by_label(ctx->gbuf, "Struct", &structs, &struct_count);
+    if (class_count == 0 && struct_count == 0) {
         return 0;
     }
 
@@ -337,7 +341,11 @@ int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
             continue;
         }
 
-        /* Check each Class node for method-set satisfaction */
+        /* Check each concrete-type node (Struct + Class) for method-set
+         * satisfaction. */
+        for (int c = 0; c < struct_count; c++) {
+            edge_count += check_go_class_implements(ctx, structs[c], iface, imethods, im_count);
+        }
         for (int c = 0; c < class_count; c++) {
             edge_count += check_go_class_implements(ctx, classes[c], iface, imethods, im_count);
         }

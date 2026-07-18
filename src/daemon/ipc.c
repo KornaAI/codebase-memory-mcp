@@ -5130,13 +5130,45 @@ static int win_overlapped_wait(HANDLE handle, OVERLAPPED *overlapped, DWORD time
 
 static bool win_pipe_client_is_current_user(HANDLE pipe) {
     win_security_t security;
-    if (!win_security_init(&security) || !security.impersonate_named_pipe_client(pipe)) {
+    if (!win_security_init(&security)) {
+        cbm_log_warn("daemon.accept.client_identity", "step", "security_init");
+        win_security_destroy(&security);
+        return false;
+    }
+    if (!security.impersonate_named_pipe_client(pipe)) {
+        /* ERROR_CANNOT_IMPERSONATE (1368) here means the client has not yet
+         * written to the pipe - i.e. the daemon validated identity before the
+         * client sent its first frame, or the accept loop fired on a pipe with
+         * no real client behind it (the runner spin symptom). */
+        char error_text[16];
+        (void)snprintf(error_text, sizeof(error_text), "%lu", (unsigned long)GetLastError());
+        cbm_log_warn("daemon.accept.client_identity", "step", "impersonate", "error", error_text);
         win_security_destroy(&security);
         return false;
     }
     HANDLE token = NULL;
     bool opened = security.open_thread_token(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) != 0;
+    if (!opened) {
+        char error_text[16];
+        (void)snprintf(error_text, sizeof(error_text), "%lu", (unsigned long)GetLastError());
+        cbm_log_warn("daemon.accept.client_identity", "step", "thread_token", "error", error_text);
+    }
     bool same_user = opened && win_token_is_current_user(&security, token);
+    if (opened && !same_user) {
+        /* Impersonation succeeded but the client's account SID does not match
+         * the daemon's. Classify the impersonated identity: an anonymous or
+         * service SID means the pipe carried no real user context. */
+        PSID client_sid = NULL;
+        void *client_user = win_token_user_query(&security, token, &client_sid);
+        const char *sid_class =
+            !client_sid                                                           ? "unreadable"
+            : security.is_well_known_sid(client_sid, WinAnonymousSid)             ? "anonymous"
+            : security.is_well_known_sid(client_sid, WinLocalSystemSid)           ? "system"
+            : security.is_well_known_sid(client_sid, WinBuiltinAdministratorsSid) ? "administrators"
+                                                                                  : "other_account";
+        cbm_log_warn("daemon.accept.client_identity", "step", "sid_mismatch", "client", sid_class);
+        free(client_user);
+    }
     if (token) {
         (void)CloseHandle(token);
     }

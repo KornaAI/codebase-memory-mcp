@@ -3225,6 +3225,7 @@ typedef BOOL(WINAPI *initialize_acl_fn)(PACL, DWORD, DWORD);
 typedef BOOL(WINAPI *add_access_allowed_ace_fn)(PACL, DWORD, DWORD, PSID);
 typedef BOOL(WINAPI *initialize_security_descriptor_fn)(PSECURITY_DESCRIPTOR, DWORD);
 typedef BOOL(WINAPI *set_security_descriptor_dacl_fn)(PSECURITY_DESCRIPTOR, BOOL, PACL, BOOL);
+typedef BOOL(WINAPI *set_security_descriptor_owner_fn)(PSECURITY_DESCRIPTOR, PSID, BOOL);
 typedef BOOL(WINAPI *get_acl_information_fn)(PACL, LPVOID, DWORD, ACL_INFORMATION_CLASS);
 typedef BOOL(WINAPI *get_ace_fn)(PACL, DWORD, LPVOID *);
 typedef DWORD(WINAPI *get_security_info_fn)(HANDLE, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID *,
@@ -3251,6 +3252,7 @@ typedef struct {
     add_access_allowed_ace_fn add_access_allowed_ace;
     initialize_security_descriptor_fn initialize_security_descriptor;
     set_security_descriptor_dacl_fn set_security_descriptor_dacl;
+    set_security_descriptor_owner_fn set_security_descriptor_owner;
     get_acl_information_fn get_acl_information;
     get_ace_fn get_ace;
     get_security_info_fn get_security_info;
@@ -3519,6 +3521,8 @@ static bool win_security_init(win_security_t *security) {
                           initialize_security_descriptor_fn, "InitializeSecurityDescriptor");
     RESOLVE_ADVAPI_MEMBER(security, set_security_descriptor_dacl, set_security_descriptor_dacl_fn,
                           "SetSecurityDescriptorDacl");
+    RESOLVE_ADVAPI_MEMBER(security, set_security_descriptor_owner, set_security_descriptor_owner_fn,
+                          "SetSecurityDescriptorOwner");
     RESOLVE_ADVAPI_MEMBER(security, get_acl_information, get_acl_information_fn,
                           "GetAclInformation");
     RESOLVE_ADVAPI_MEMBER(security, get_ace, get_ace_fn, "GetAce");
@@ -3564,7 +3568,15 @@ static bool win_security_init(win_security_t *security) {
                                           security->user_sid) ||
         !security->initialize_security_descriptor(security->descriptor,
                                                   SECURITY_DESCRIPTOR_REVISION) ||
-        !security->set_security_descriptor_dacl(security->descriptor, TRUE, security->acl, FALSE)) {
+        !security->set_security_descriptor_dacl(security->descriptor, TRUE, security->acl, FALSE) ||
+        /* The owner must be stamped explicitly at creation: members of the
+         * Administrators group can carry a default-owner policy of BUILTIN\
+         * Administrators (standard on Windows Server, including CI runners),
+         * and every private-namespace validation demands the exact token-user
+         * SID as owner. Relying on the token default makes the daemon reject
+         * objects it created itself. */
+        !security->set_security_descriptor_owner(security->descriptor, security->user_sid,
+                                                 FALSE)) {
         win_security_destroy(security);
         return false;
     }
@@ -5229,17 +5241,36 @@ cbm_daemon_ipc_connection_t *cbm_daemon_ipc_connect(const cbm_daemon_ipc_endpoin
     }
     uint64_t deadline_ms = ipc_deadline_after(timeout_ms);
     HANDLE pipe = INVALID_HANDLE_VALUE;
+    bool wait_logged = false;
     for (;;) {
         win_rendezvous_status_t rendezvous = win_endpoint_refresh_rendezvous(endpoint);
         if (rendezvous == WIN_RENDEZVOUS_CORRUPT || rendezvous == WIN_RENDEZVOUS_ERROR) {
+            /* Terminal refusal: without a reason here the caller can only
+             * report a generic connect timeout, which made owner-policy
+             * failures on the rendezvous namespace undiagnosable. */
+            cbm_log_warn("daemon.client.rendezvous_unreadable", "status",
+                         rendezvous == WIN_RENDEZVOUS_CORRUPT ? "corrupt" : "unsafe_or_io");
             return NULL;
         }
         win_generation_address_t *generation =
             rendezvous == WIN_RENDEZVOUS_VALID ? win_endpoint_generation_snapshot(endpoint) : NULL;
         if (!generation) {
             if (win_retry_pause(deadline_ms)) {
+                if (!wait_logged) {
+                    wait_logged = true;
+                    cbm_log_warn("daemon.client.rendezvous_wait", "status",
+                                 rendezvous == WIN_RENDEZVOUS_ABSENT  ? "absent"
+                                 : rendezvous == WIN_RENDEZVOUS_BUSY  ? "busy"
+                                 : rendezvous == WIN_RENDEZVOUS_VALID ? "no_generation"
+                                                                      : "unknown");
+                }
                 continue;
             }
+            cbm_log_warn("daemon.client.connect_deadline", "status",
+                         rendezvous == WIN_RENDEZVOUS_ABSENT  ? "absent"
+                         : rendezvous == WIN_RENDEZVOUS_BUSY  ? "busy"
+                         : rendezvous == WIN_RENDEZVOUS_VALID ? "no_generation"
+                                                              : "unknown");
             return NULL;
         }
         pipe = CreateFileW(generation->pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
@@ -5272,6 +5303,7 @@ cbm_daemon_ipc_connection_t *cbm_daemon_ipc_connect(const cbm_daemon_ipc_endpoin
     DWORD mode = PIPE_READMODE_BYTE;
     if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL) ||
         !win_pipe_server_is_current_user(pipe)) {
+        cbm_log_warn("daemon.client.pipe_rejected", "stage", "server_identity");
         (void)CloseHandle(pipe);
         return NULL;
     }

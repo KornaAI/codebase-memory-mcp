@@ -623,6 +623,7 @@ typedef BOOL(WINAPI *private_is_valid_sid_fn)(PSID);
 typedef BOOL(WINAPI *private_initialize_acl_fn)(PACL, DWORD, DWORD);
 typedef BOOL(WINAPI *private_add_access_allowed_ace_fn)(PACL, DWORD, DWORD, PSID);
 typedef BOOL(WINAPI *private_initialize_security_descriptor_fn)(PSECURITY_DESCRIPTOR, DWORD);
+typedef BOOL(WINAPI *private_set_security_descriptor_owner_fn)(PSECURITY_DESCRIPTOR, PSID, BOOL);
 typedef BOOL(WINAPI *private_set_security_descriptor_dacl_fn)(PSECURITY_DESCRIPTOR, BOOL, PACL,
                                                               BOOL);
 typedef BOOL(WINAPI *private_set_security_descriptor_control_fn)(PSECURITY_DESCRIPTOR,
@@ -649,6 +650,7 @@ typedef struct {
     private_add_access_allowed_ace_fn add_access_allowed_ace;
     private_initialize_security_descriptor_fn initialize_security_descriptor;
     private_set_security_descriptor_dacl_fn set_security_descriptor_dacl;
+    private_set_security_descriptor_owner_fn set_security_descriptor_owner;
     private_set_security_descriptor_control_fn set_security_descriptor_control;
     private_get_security_descriptor_control_fn get_security_descriptor_control;
     private_get_acl_information_fn get_acl_information;
@@ -764,6 +766,8 @@ static bool private_win_security_init(private_win_security_t *security) {
                            "InitializeSecurityDescriptor");
     PRIVATE_RESOLVE_ADVAPI(security, set_security_descriptor_dacl,
                            private_set_security_descriptor_dacl_fn, "SetSecurityDescriptorDacl");
+    PRIVATE_RESOLVE_ADVAPI(security, set_security_descriptor_owner,
+                           private_set_security_descriptor_owner_fn, "SetSecurityDescriptorOwner");
     PRIVATE_RESOLVE_ADVAPI(security, set_security_descriptor_control,
                            private_set_security_descriptor_control_fn,
                            "SetSecurityDescriptorControl");
@@ -814,6 +818,13 @@ static bool private_win_security_init(private_win_security_t *security) {
         !security->initialize_security_descriptor(security->descriptor,
                                                   SECURITY_DESCRIPTOR_REVISION) ||
         !security->set_security_descriptor_dacl(security->descriptor, TRUE, security->acl, FALSE) ||
+        /* Stamp the exact token-user SID as owner at creation: admin-group
+         * tokens can default new objects to BUILTIN\Administrators (standard
+         * on Windows Server), and private_win_owner_only_dacl demands the
+         * exact user SID — without this every lock file the process creates
+         * fails its own validation. */
+        !security->set_security_descriptor_owner(security->descriptor, security->user_sid,
+                                                 FALSE) ||
         !security->set_security_descriptor_control(security->descriptor, SE_DACL_PROTECTED,
                                                    SE_DACL_PROTECTED)) {
         private_win_security_destroy(security);

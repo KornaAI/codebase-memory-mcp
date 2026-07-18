@@ -10,11 +10,12 @@
 #                   those need a real Windows VM or the CI legs]
 #   macOS:          run natively (not in Docker)
 #
-# CI fidelity: the test containers are capped at 4 CPUs to mirror the GitHub
-# runners — deadline/starvation failures only reproduce under that constraint.
-# CBM_LOCAL_CI_CPUS overrides (0 = unconstrained fast mode). ccache persists
-# in named volumes; entries are content-verified (stale hits impossible), so
-# warm reruns skip unchanged compilation entirely.
+# Speed first: test containers run unconstrained by default. Before pushing
+# anything that touches timing, scheduling, or subprocess code, run ONE pass
+# with CBM_LOCAL_CI_CPUS=4 (CI-fidelity mode, mirrors the 4-core GitHub
+# runners) — deadline/starvation failures only reproduce under that
+# constraint. ccache persists in named volumes; entries are content-verified
+# (stale hits impossible), so warm reruns skip unchanged compilation.
 # Run this from the WORKTREE you want tested: the containers mount the repo
 # this script resides in.
 #

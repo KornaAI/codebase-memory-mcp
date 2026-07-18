@@ -93,8 +93,27 @@ export RUNNER LOGDIR RESULTS_FILE
 run_one() {
     s="$1"
     t0=$SECONDS
-    "$RUNNER" "$s" > "$LOGDIR/$s.log" 2>&1
-    rc=$?
+    # Per-suite wall-clock ceiling so a wedged suite fails LOUDLY instead of
+    # blocking the run (and the single local build slot) indefinitely. The
+    # `incremental` suite legitimately re-indexes large fixtures (minutes) so
+    # it gets a wider ceiling until the template-DB fixture refactor lands.
+    # Uses `timeout` where available (always in the Linux container / CI); on a
+    # host without it the suite runs uncapped (no regression vs before).
+    case "$s" in
+        incremental) st="${CBM_SUITE_TIMEOUT_SLOW:-3600}" ;;
+        *) st="${CBM_SUITE_TIMEOUT:-900}" ;;
+    esac
+    if command -v timeout >/dev/null 2>&1; then
+        timeout --kill-after=15 "$st" "$RUNNER" "$s" > "$LOGDIR/$s.log" 2>&1
+        rc=$?
+        if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "  FAIL: suite '$s' exceeded ${st}s wall clock (killed as hung)" \
+                >> "$LOGDIR/$s.log"
+        fi
+    else
+        "$RUNNER" "$s" > "$LOGDIR/$s.log" 2>&1
+        rc=$?
+    fi
     secs=$((SECONDS - t0))
     summary=$(grep -E '^  [0-9]+ passed' "$LOGDIR/$s.log" | tail -1)
     pass=$(printf '%s' "$summary" | sed -n 's/^  \([0-9]*\) passed.*/\1/p')

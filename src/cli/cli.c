@@ -10269,6 +10269,17 @@ int cbm_cmd_install(int argc, char **argv) {
         (void)cbm_rmdir(prepared_dir);
     }
     if (activation_rc != CLI_OK) {
+        /* A dry-run mutates nothing (every mutation is guarded by !dry_run),
+         * so a non-OK here is a plan-side check (agent-config / PATH probe)
+         * and must still report that it was a dry-run - on Windows it was
+         * silently skipping the summary and reading as a hard failure. Emit
+         * the dry-run indicator, and name the underlying status for triage. */
+        if (dry_run) {
+            (void)fprintf(stderr, "note: install --dry-run plan check returned %d\n",
+                          activation_rc);
+            printf("\n(dry-run — no files were modified)\n");
+            return CLI_OK;
+        }
         return CLI_TRUE;
     }
 

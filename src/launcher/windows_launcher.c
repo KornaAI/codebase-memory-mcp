@@ -315,8 +315,22 @@ static DWORD launcher_private_mutation_rights(void) {
            DELETE | WRITE_DAC | WRITE_OWNER | ACCESS_SYSTEM_SECURITY;
 }
 
-static bool launcher_security_is_private(HANDLE file) {
-    return launcher_security_is_safe(file, true, launcher_private_mutation_rights());
+static bool launcher_security_is_trusted(HANDLE file) {
+    /* The launcher validates its own binary, staged payloads, and their
+     * directories. On an elevated or managed install (Program Files, an
+     * admin-run installer, GitHub's Windows runners) the default owner of
+     * newly created objects is BUILTIN\Administrators, not the exact token
+     * user, so demanding the current user as owner rejects the launcher's
+     * own legitimately privileged-owned files. Accept the trusted-owner set
+     * (self, SYSTEM, Administrators, TrustedInstaller) that
+     * launcher_sid_is_trusted already defines and that the daemon side
+     * applies for the identical reason (see src/daemon/ipc.c owner policy):
+     * a less-privileged attacker cannot stamp any of those owners without
+     * already holding that privilege. DACL strictness is unchanged -- every
+     * allow ACE must still grant only a trusted identity -- so tamper
+     * resistance is preserved; only the owner field is widened to the
+     * privileged identities that manage the install. */
+    return launcher_security_is_safe(file, false, launcher_private_mutation_rights());
 }
 
 static HANDLE launcher_open_regular(const wchar_t *path, DWORD access, bool require_private) {
@@ -326,7 +340,7 @@ static HANDLE launcher_open_regular(const wchar_t *path, DWORD access, bool requ
                     FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     BY_HANDLE_FILE_INFORMATION information;
     if (!launcher_file_information(file, &information) ||
-        (require_private && !launcher_security_is_private(file))) {
+        (require_private && !launcher_security_is_trusted(file))) {
         if (file != INVALID_HANDLE_VALUE)
             (void)CloseHandle(file);
         return INVALID_HANDLE_VALUE;
@@ -344,7 +358,7 @@ static HANDLE launcher_open_directory_private(const wchar_t *path) {
                  GetFileInformationByHandle(directory, &information) != 0 &&
                  (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
                  (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 &&
-                 launcher_security_is_private(directory);
+                 launcher_security_is_trusted(directory);
     if (!valid) {
         if (directory != INVALID_HANDLE_VALUE)
             (void)CloseHandle(directory);
